@@ -1,0 +1,119 @@
+resources:
+  pipelines:
+    - pipeline: reactCI
+      source: 'React-CI-Pipeline'   # name of the React CI pipeline
+      trigger: true                 # trigger CD when React CI completes
+    - pipeline: mavenCI
+      source: 'Maven-CI-Pipeline'   # name of the Maven CI pipeline
+      trigger: true                 # trigger CD when Maven CI completes
+
+# Linux agent pool
+pool:
+  vmImage: 'ubuntu-latest'
+  # OR, if you use a self-hosted Linux pool:
+  # name: 'Linux-Agent-Pool'
+
+# -------------------------------
+# Variables
+# -------------------------------
+variables:
+  acrName: 'mycompanyacr'                            # ACR name without .azurecr.io
+  imageName: 'myapp'
+  imageTag: '$(Build.BuildId)'                       # propagate from build stage
+  helmChartPath: 'helm/myapp'                        # path to Helm chart
+  helmReleaseName: 'myapp'                           # Helm release name
+  helmNamespace: 'prod'                              # target namespace
+  valuesFile: 'helm/values.yaml'                     # default values file
+
+  # Service connections
+  kubernetesServiceConn: 'aks-kubernetes-connection' # Kubernetes service connection (recommended)
+  azureRmServiceConn: 'azure-rm-connection'          # Optional if using AzureCLI path
+
+  # AKS identifiers (only needed if using AzureCLI to set context)
+  aksResourceGroup: 'rg-aks-prod'
+  aksClusterName: 'aks-prod'
+
+# -------------------------------
+# Stages
+# -------------------------------
+stages:
+  # ----------------------------------------------------------
+  # STAGE 1 - PREPARE: Install Helm & Lint chart
+  # ----------------------------------------------------------
+  - stage: HelmPrepare
+    displayName: "Prepare Helm (Install & Lint)"
+    jobs:
+      - job: ValidateChart
+        steps:
+          - checkout: self
+
+          # Install Helm v3 (Azure DevOps task)
+          - task: HelmInstaller@1
+            displayName: "Install Helm v3"
+            inputs:
+              helmVersionToInstall: '3.14.0'    # choose a stable version
+
+          # Lint chart
+          - task: HelmDeploy@0
+            displayName: "Helm Lint"
+            inputs:
+              connectionType: 'None'            # lint does not need a cluster context
+              command: 'lint'
+              chartType: 'FilePath'
+              chartPath: '$(helmChartPath)'
+
+          # Optional: Render templates (dry-run) to validate manifests
+          - script: |
+              helm template $(helmReleaseName) $(helmChartPath) \
+                --namespace $(helmNamespace) \
+                -f $(valuesFile) \
+                --set image.repository=$(acrName).azurecr.io/$(imageName) \
+                --set image.tag=$(imageTag)
+            displayName: "Helm Template (Dry-Run)"
+
+  # ----------------------------------------------------------
+  # STAGE 2 - DEPLOY: Helm upgrade/install to AKS (with approvals)
+  # ----------------------------------------------------------
+  - stage: HelmDeploy
+    displayName: "Helm Upgrade/Install to AKS"
+    dependsOn: HelmPrepare
+
+    # Use an Environment for approvals (configure approvers in Pipelines → Environments)
+    environment: 'Dev-aks'
+
+    jobs:
+      - job: DeployJob
+        displayName: "Deploy to AKS via Helm"
+        steps:
+          - checkout: self
+
+          # Install Helm v3 again in this job's context
+          - task: HelmInstaller@1
+            displayName: "Install Helm v3"
+            inputs:
+              helmVersionToInstall: '3.14.0'
+
+          # Use Kubernetes service connection
+          - task: HelmDeploy@0
+            displayName: "Helm Upgrade/Install (K8s Service Connection)"
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceEndpoint: '$(kubernetesServiceConn)'  # your K8s service connection name
+              namespace: '$(helmNamespace)'
+              command: 'upgrade'
+              chartType: 'FilePath'
+              chartPath: '$(helmChartPath)'
+              releaseName: '$(helmReleaseName)'
+              install: true                      # upgrade --install
+              waitForExecution: true             # --wait
+              arguments: '--atomic --timeout 10m' # rollback on failure, 10 min timeout
+              valueFile: '$(valuesFile)'         # base values
+              overrideValues: |
+                image.repository=$(acrName).azurecr.io/$(imageName)
+                image.tag=$(imageTag)
+
+          # Post-deploy verification
+          - script: |
+              echo "Listing pods in namespace $(helmNamespace):"
+              kubectl get pods -n $(helmNamespace) -o wide
+            displayName: "Post-Deploy Verification"

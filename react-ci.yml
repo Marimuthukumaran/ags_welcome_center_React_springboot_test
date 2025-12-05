@@ -1,0 +1,168 @@
+trigger:
+  - master
+ 
+pool:
+  vmImage: 'ubuntu-latest'
+ 
+variables:
+  imageName: 'react-ui-app'
+  acrName: 'mycompanyacr'          # Without .azurecr.io
+  dockerRegistryServiceConn: 'acr-service-connection'
+  sonarServiceConn: 'sonarqube-service-connection'
+  iqServiceConn: 'nexus-iq-service-connection'
+  trivyOutput: 'trivy-report.json'
+  nodeVersion: '18.x'
+ 
+stages:
+  # ----------------------------------------------------------
+  # STAGE 1 - BUILD + TEST + COVERAGE + SONARQUBE + IQ
+  # ----------------------------------------------------------
+  - stage: Build
+    displayName: "React Build & Code Quality"
+    jobs:
+      - job: ReactBuild
+        steps:
+ 
+          # Checkout Code
+          - checkout: self
+ 
+          # Node Setup  (Optinal if we are using self hosted agent because it already have the NodeTool)
+          #- task: NodeTool@0
+          #  displayName: "Use Node $(nodeVersion)"
+          #  inputs:
+          #    versionSpec: '$(nodeVersion)'
+
+          # Cache NPM (speeds up installs but it is optional is we are using the selfhosted agent because it already have the local cache)
+          - task: Cache@2
+            displayName: "Cache npm"
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              restoreKeys: |
+                npm | "$(Agent.OS)"
+              path: '$(System.DefaultWorkingDirectory)/node_modules'
+ 
+          # Install Dependencies
+          - script: |
+              npm install
+            displayName: "Install NPM Packages"
+ 
+          # SonarQube Prepare
+          - task: SonarQubePrepare@5
+            displayName: "Prepare SonarQube Analysis"
+            inputs:
+              SonarQube: $(sonarServiceConn)
+              scannerMode: 'Other'
+              configMode: 'manual'
+              cliProjectKey: 'react-ui'
+              cliProjectName: 'react-ui'
+              cliSources: 'src'
+              extraProperties: |
+                sonar.javascript.lcov.reportPaths=coverage/lcov.info
+ 
+          # Run Tests + Coverage (Jest)
+          - script: |
+              npm test -- --coverage --watchAll=false
+            displayName: "Run Jest Tests & Coverage"
+ 
+          # Publish Jest Coverage
+          - task: PublishCodeCoverageResults@1
+            displayName: "Publish Coverage"
+            inputs:
+              codeCoverageTool: 'Cobertura'
+              summaryFileLocation: 'coverage/cobertura-coverage.xml'
+              reportDirectory: 'coverage'
+ 
+          # SonarQube Final Analysis
+          - task: SonarQubeAnalyze@5
+            displayName: "SonarQube Analyze"
+ 
+          # NEXUS IQ SCAN (Sonatype IQ)
+          - task: NexusIqPipelineTask@1
+            displayName: "Nexus IQ Scan"
+            inputs:
+              nexusIqService: $(iqServiceConn)
+              applicationId: 'react-ui'
+              stage: 'build'
+              scanTargets: '$(System.DefaultWorkingDirectory)'
+ 
+          # React Build
+          - script: |
+              npm run build
+            displayName: "React Build"
+ 
+          # Publish Build Artifact
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish React Build"
+            inputs:
+              pathToPublish: 'build'
+              artifactName: 'react-build'
+              publishLocation: 'Container'
+ 
+  # ----------------------------------------------------------
+  # STAGE 2 - DOCKER BUILD + SCANS + PUSH TO ACR
+  # ----------------------------------------------------------
+  - stage: Container
+    displayName: "Docker Build, Scan & Push"
+    dependsOn: Build
+    jobs:
+      - job: DockerJob
+        steps:
+        
+          # Download the React build artifact into ./build
+          - task: DownloadPipelineArtifact@2
+            displayName: "Download React Build Artifact"
+            inputs:
+              buildType: 'current'
+              artifactName: 'react-build'
+              targetPath: 'build'   # local ./build folder (used by Dockerfile)
+ 
+          # Login to ACR
+          - task: Docker@2
+            displayName: "Login to ACR"
+            inputs:
+              command: login
+              containerRegistry: $(dockerRegistryServiceConn)
+ 
+          # Docker Build
+          - task: Docker@2
+            displayName: "Docker Build"
+            inputs:
+              command: build
+              Dockerfile: '**/Dockerfile'
+              repository: '$(acrName).azurecr.io/$(imageName)'
+              tags: |
+                $(Build.BuildId)
+ 
+          # TRIVY Image Scan
+          - script: |
+              echo "Installing Trivy..."
+              sudo apt-get update && sudo apt-get install -y wget
+              wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+              echo "deb https://aquasecurity.github.io/trivy-repo/deb stable main" | sudo tee -a /etc/apt/sources.list
+              sudo apt-get update
+              sudo apt-get install -y trivy
+ 
+              echo "Running Trivy Scan..."
+              trivy image --severity HIGH,CRITICAL \
+                --no-progress \
+                --format json \
+                --output $(trivyOutput) \
+                $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
+            displayName: "Run Trivy Scan"
+ 
+          # Publish Trivy Report
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Trivy Scan Report"
+            inputs:
+              pathToPublish: '$(trivyOutput)'
+              artifactName: 'trivy-report'
+              publishLocation: 'Container'
+ 
+          # Push Docker Image to ACR
+          - task: Docker@2
+            displayName: "Docker Push"
+            inputs:
+              command: push
+              repository: '$(acrName).azurecr.io/$(imageName)'
+              tags: |
+                $(Build.BuildId)

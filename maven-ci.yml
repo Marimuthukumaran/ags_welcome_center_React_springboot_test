@@ -1,0 +1,163 @@
+trigger:
+  - master
+ 
+pool:
+  vmImage: 'ubuntu-latest'
+ 
+variables:
+  mavenOpts: '-Dmaven.test.failure.ignore=false'
+  imageName: 'myapp'
+  acrName: 'mycompanyacr'        # ACR name without .azurecr.io
+  dockerRegistryServiceConn: 'acr-service-connection'
+  sonarServiceConn: 'sonarqube-service-connection'
+  iqServiceConn: 'nexus-iq-service-connection'
+  trivyOutput: 'trivy-report.json'
+ 
+stages:
+  # ----------------------------------------------------------
+  # STAGE 1 - BUILD + TEST + JACOCO + SONARQUBE
+  # ----------------------------------------------------------
+  - stage: Build
+    displayName: "Build & Code Quality"
+    jobs:
+      - job: MavenBuild
+        steps:
+ 
+          # Checkout
+          - checkout: self
+          
+          # Node Setup  (Optinal if we are using self hosted agent then it already have the jdk and maven)
+          # - task: JavaToolInstaller@0
+          #   inputs:
+          #     versionSpec: '$(javaVersion)'
+          #     jdkArchitectureOption: 'x64'
+          #     jdkSourceOption: 'PreInstalled'
+          
+          # Cache maven Dependencies (speeds up installs but it is optional is we are using the selfhosted agent because it already have the local cache)
+          - task: Cache@2
+            displayName: "Cache Maven Dependencies"
+            inputs:
+              key: 'maven | "$(Agent.OS)" | pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: ~/.m2/repository
+ 
+          # SonarQube start
+          - task: SonarQubePrepare@5
+            inputs:
+              SonarQube: $(sonarServiceConn)
+              scannerMode: 'Other'
+              configMode: 'manual'
+              cliProjectKey: 'myapp'
+              cliProjectName: 'myapp'
+              cliSources: 'src'
+              extraProperties: |
+                sonar.java.coveragePlugin=jacoco
+                sonar.coverage.jacoco.xmlReportPaths=**/jacoco.xml
+ 
+          # Maven Build with test + Jacoco report
+          - task: Maven@4
+            displayName: "Maven Build & Test"
+            inputs:
+              mavenPomFile: 'pom.xml'
+              goals: 'clean verify'
+              options: '$(mavenOpts)'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/*.xml'
+ 
+          # Publish Jacoco Coverage to Azure DevOps
+          - task: PublishCodeCoverageResults@1
+            inputs:
+              codeCoverageTool: 'JaCoCo'
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/jacoco.xml'
+              reportDirectory: '$(System.DefaultWorkingDirectory)/**/jacoco-html'
+ 
+          # SonarQube End & Quality Gate check
+          - task: SonarQubeAnalyze@5
+            displayName: "SonarQube Analyze"
+
+          # NEXUS IQ SCAN (Sonatype)
+          - task: NexusIqPipelineTask@1
+            displayName: "Nexus IQ Scan"
+            inputs:
+              nexusIqService: $(iqServiceConn)
+              applicationId: 'myapp'
+              stage: 'build'
+              scanTargets: '$(System.DefaultWorkingDirectory)'
+              
+          # Publish the built JAR as an artifact for Stage 2
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish App JAR"
+            inputs:
+              pathToPublish: '$(System.DefaultWorkingDirectory)/target'
+              artifactName: 'app-jar'
+              publishLocation: 'Container'
+ 
+  # ----------------------------------------------------------
+  # STAGE 2 - BUILD DOCKER IMAGE + TRIVY SCAN + IQ SCAN
+  # ----------------------------------------------------------
+  - stage: Container
+    displayName: "Docker Build, Scan & Push"
+    dependsOn: Build
+    jobs:
+      - job: DockerJob
+        steps:
+        
+          # Download the JAR artifact into ./target (Dockerfile expects target/*.jar)
+          - task: DownloadPipelineArtifact@2
+            displayName: "Download App JAR Artifact"
+            inputs:
+              buildType: 'current'
+              artifactName: 'app-jar'
+              targetPath: 'target'
+ 
+          # Login to ACR
+          - task: Docker@2
+            displayName: "Login to ACR"
+            inputs:
+              command: login
+              containerRegistry: $(dockerRegistryServiceConn)
+ 
+          # Build Docker Image
+          - task: Docker@2
+            displayName: "Docker Build"
+            inputs:
+              command: build
+              Dockerfile: '**/Dockerfile'
+              repository: '$(acrName).azurecr.io/$(imageName)'
+              tags: |
+                $(Build.BuildId)
+ 
+          # TRIVY VULNERABILITY SCAN
+          - script: |
+              echo "Installing Trivy..."
+              sudo apt-get update && sudo apt-get install -y wget
+              wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+              echo "deb https://aquasecurity.github.io/trivy-repo/deb stable main" | sudo tee -a /etc/apt/sources.list
+              sudo apt-get update
+              sudo apt-get install -y trivy
+ 
+              echo "Scanning Docker image with Trivy..."
+              trivy image --severity HIGH,CRITICAL \
+                --no-progress \
+                --format json \
+                --output $(trivyOutput) \
+                $(acrName).azurecr.io/$(imageName):$(Build.BuildId)
+            displayName: "Run Trivy Scan"
+ 
+          # Publish Trivy Report
+          - task: PublishBuildArtifacts@1
+            displayName: "Publish Trivy Scan Report"
+            inputs:
+              pathToPublish: '$(trivyOutput)'
+              artifactName: 'trivy-report'
+              publishLocation: 'Container'
+ 
+          # Push Docker Image to ACR
+          - task: Docker@2
+            displayName: "Push Docker Image"
+            inputs:
+              command: push
+              repository: '$(acrName).azurecr.io/$(imageName)'
+              tags: |
+                $(Build.BuildId)
