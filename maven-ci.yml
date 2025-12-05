@@ -36,13 +36,13 @@ stages:
           #     jdkSourceOption: 'PreInstalled'
           
           # Cache maven Dependencies (speeds up installs but it is optional is we are using the selfhosted agent because it already have the local cache)
-          - task: Cache@2
-            displayName: "Cache Maven Dependencies"
-            inputs:
-              key: 'maven | "$(Agent.OS)" | pom.xml'
-              restoreKeys: |
-                maven | "$(Agent.OS)"
-              path: ~/.m2/repository
+          # - task: Cache@2
+          #   displayName: "Cache Maven Dependencies"
+          #   inputs:
+          #     key: 'maven | "$(Agent.OS)" | pom.xml'
+          #     restoreKeys: |
+          #       maven | "$(Agent.OS)"
+          #     path: ~/.m2/repository
  
           # SonarQube start
           # - task: SonarQubePrepare@5
