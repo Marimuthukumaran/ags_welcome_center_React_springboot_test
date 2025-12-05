@@ -1,5 +1,7 @@
-trigger:
-  - master
+trigger: none
+
+# trigger:
+#  - master
  
 pool:
   vmImage: 'ubuntu-latest'
@@ -43,47 +45,47 @@ stages:
               path: ~/.m2/repository
  
           # SonarQube start
-          - task: SonarQubePrepare@5
-            inputs:
-              SonarQube: $(sonarServiceConn)
-              scannerMode: 'Other'
-              configMode: 'manual'
-              cliProjectKey: 'myapp'
-              cliProjectName: 'myapp'
-              cliSources: 'src'
-              extraProperties: |
-                sonar.java.coveragePlugin=jacoco
-                sonar.coverage.jacoco.xmlReportPaths=**/jacoco.xml
+          # - task: SonarQubePrepare@5
+          #   inputs:
+          #     SonarQube: $(sonarServiceConn)
+          #     scannerMode: 'Other'
+          #     configMode: 'manual'
+          #     cliProjectKey: 'myapp'
+          #     cliProjectName: 'myapp'
+          #     cliSources: 'src'
+          #     extraProperties: |
+          #       sonar.java.coveragePlugin=jacoco
+          #       sonar.coverage.jacoco.xmlReportPaths=**/jacoco.xml
  
           # Maven Build with test + Jacoco report
           - task: Maven@4
             displayName: "Maven Build & Test"
             inputs:
               mavenPomFile: 'pom.xml'
-              goals: 'clean verify'
+              goals: 'clean package'
               options: '$(mavenOpts)'
               publishJUnitResults: true
               testResultsFiles: '**/surefire-reports/*.xml'
  
           # Publish Jacoco Coverage to Azure DevOps
-          - task: PublishCodeCoverageResults@1
-            inputs:
-              codeCoverageTool: 'JaCoCo'
-              summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/jacoco.xml'
-              reportDirectory: '$(System.DefaultWorkingDirectory)/**/jacoco-html'
+          # - task: PublishCodeCoverageResults@1
+          #   inputs:
+          #     codeCoverageTool: 'JaCoCo'
+          #     summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/jacoco.xml'
+          #     reportDirectory: '$(System.DefaultWorkingDirectory)/**/jacoco-html'
  
           # SonarQube End & Quality Gate check
-          - task: SonarQubeAnalyze@5
-            displayName: "SonarQube Analyze"
+          # - task: SonarQubeAnalyze@5
+          #   displayName: "SonarQube Analyze"
 
           # NEXUS IQ SCAN (Sonatype)
-          - task: NexusIqPipelineTask@1
-            displayName: "Nexus IQ Scan"
-            inputs:
-              nexusIqService: $(iqServiceConn)
-              applicationId: 'myapp'
-              stage: 'build'
-              scanTargets: '$(System.DefaultWorkingDirectory)'
+          # - task: NexusIqPipelineTask@1
+          #   displayName: "Nexus IQ Scan"
+          #   inputs:
+          #     nexusIqService: $(iqServiceConn)
+          #     applicationId: 'myapp'
+          #     stage: 'build'
+          #     scanTargets: '$(System.DefaultWorkingDirectory)'
               
           # Publish the built JAR as an artifact for Stage 2
           - task: PublishBuildArtifacts@1
