@@ -65,7 +65,7 @@ stages:
               goals: 'clean package'
               options: '$(mavenOpts)'
               publishJUnitResults: true
-              testResultsFiles: '**/surefire-reports/*.xml'
+              testResultsFiles: 'backend/**/surefire-reports/*.xml'
  
           # Publish Jacoco Coverage to Azure DevOps
           # - task: PublishCodeCoverageResults@1
