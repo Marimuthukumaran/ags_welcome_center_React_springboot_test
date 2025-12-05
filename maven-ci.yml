@@ -58,6 +58,13 @@ stages:
           #       sonar.coverage.jacoco.xmlReportPaths=**/jacoco.xml
  
           # Maven Build with test + Jacoco report
+          
+          - script: |
+              pwd
+              ls -la
+              ls -la backend
+            displayName: "Debug: list files"
+
           - task: Maven@4
             displayName: "Maven Build & Test"
             inputs:
