@@ -8,12 +8,12 @@ pool:
  
 variables:
   mavenOpts: '-Dmaven.test.failure.ignore=false'
-  imageName: 'myapp'
-  acrName: 'mycompanyacr'        # ACR name without .azurecr.io
-  dockerRegistryServiceConn: 'acr-service-connection'
-  sonarServiceConn: 'sonarqube-service-connection'
-  iqServiceConn: 'nexus-iq-service-connection'
-  trivyOutput: 'trivy-report.json'
+  imageName: 'test'
+  acrName: 'testags'        # ACR name without .azurecr.io
+  dockerRegistryServiceConn: 'acrserviceconnection'
+  # sonarServiceConn: 'sonarqube-service-connection'
+  # iqServiceConn: 'nexus-iq-service-connection'
+  # trivyOutput: 'trivy-report.json'
  
 stages:
   # ----------------------------------------------------------
