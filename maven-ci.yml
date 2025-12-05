@@ -29,11 +29,11 @@ stages:
           - checkout: self
           
           # Node Setup  (Optinal if we are using self hosted agent then it already have the jdk and maven)
-          # - task: JavaToolInstaller@0
-          #   inputs:
-          #     versionSpec: '$(javaVersion)'
-          #     jdkArchitectureOption: 'x64'
-          #     jdkSourceOption: 'PreInstalled'
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '$(javaVersion)'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
           
           # Cache maven Dependencies (speeds up installs but it is optional is we are using the selfhosted agent because it already have the local cache)
           - task: Cache@2
@@ -61,7 +61,7 @@ stages:
           - task: Maven@4
             displayName: "Maven Build & Test"
             inputs:
-              mavenPomFile: 'pom.xml'
+              mavenPomFile: '**/pom.xml'
               goals: 'clean package'
               options: '$(mavenOpts)'
               publishJUnitResults: true
