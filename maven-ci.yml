@@ -61,7 +61,7 @@ stages:
           - task: Maven@4
             displayName: "Maven Build & Test"
             inputs:
-              mavenPomFile: '**/pom.xml'
+              mavenPomFile: 'backend/pom.xml'
               goals: 'clean package'
               options: '$(mavenOpts)'
               publishJUnitResults: true
@@ -125,7 +125,7 @@ stages:
             displayName: "Docker Build"
             inputs:
               command: build
-              Dockerfile: '**/Dockerfile'
+              Dockerfile: 'backend/Dockerfile'
               repository: '$(acrName).azurecr.io/$(imageName)'
               tags: |
                 $(Build.BuildId)
